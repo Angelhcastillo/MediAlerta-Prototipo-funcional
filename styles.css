@@ -220,6 +220,57 @@ img { max-width: 100%; }
   font-weight: 750;
 }
 .rolebar span { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.vista-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin: 0 16px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--lavender-border);
+  border-radius: 999px;
+  flex: none;
+}
+.vista-switch button {
+  min-height: 40px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 800;
+}
+.vista-switch button.on { background: var(--primary); color: #fff; }
+.device.vista-paciente .vista-switch button.on { background: var(--success); }
+.device.vista-cuidador .date { color: var(--primary); }
+.device.vista-paciente .date { color: var(--success); }
+.device.vista-paciente { border-color: #1f9d6b; }
+.vista-note {
+  margin: 6px 16px 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+.hello { margin: 2px 0 8px; color: var(--navy); font-weight: 700; }
+.person {
+  width: 100%;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  text-align: left;
+  background: var(--surface);
+  border: 2px solid var(--lavender-border);
+  border-radius: var(--radius);
+  padding: 12px;
+  margin-top: 8px;
+}
+.person.on { border-color: var(--primary); background: var(--lavender); }
+.person .grow { flex: 1; min-width: 0; }
+.person strong { display: block; color: var(--navy); }
+.person small { display: block; color: var(--muted); font-weight: 650; }
+.person .go { flex: none; color: var(--primary); font-size: 0.75rem; font-weight: 800; }
+.session.patient { background: var(--lavender); }
+.tabs-4 { grid-template-columns: repeat(4, 1fr); }
+.tabs-4 a { font-size: 0.68rem; padding: 0 2px; }
 .pill-role {
   font-style: normal;
   flex: none;

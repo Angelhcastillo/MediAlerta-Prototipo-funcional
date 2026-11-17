@@ -208,6 +208,18 @@ function normalize(data) {
   return ensureToday(data);
 }
 function viewer() { return state.viewer || defaultViewer(); }
+function isCare() { return state.vista !== "paciente"; }
+function titular() {
+  return state.profiles.find((p) => p.rol === "paciente") || state.profiles[0];
+}
+function enterAs(vista) {
+  state.vista = vista === "paciente" ? "paciente" : "cuidador";
+  ui.menu = false;
+  ui.sheet = null;
+  if (state.vista === "paciente") state.activeProfileId = titular().id;
+  save();
+  go(state.vista === "paciente" ? "hoy" : "familia");
+}
 function rolLabel(p) { return p && p.rol === "familiar" ? "Familiar" : "Paciente"; }
 function caresYou(p) { return fold(p.cuidador) === fold(viewer().nombre); }
 function carePhrase(p) { return caresYou(p) ? "Lo cuidas tú" : `Cuidador: ${p.cuidador}`; }
@@ -225,6 +237,7 @@ function daysLeft(m) {
 }
 function currentRoute() {
   const path = (location.hash || "#/inicio").replace(/^#/, "").split("?")[0];
+  if (path.startsWith("/familia")) return "familia";
   if (path.startsWith("/hoy")) return "hoy";
   if (path.startsWith("/pastillero")) return "pastillero";
   if (path.startsWith("/escanear")) return "escanear";
@@ -506,7 +519,10 @@ function fireAlarm(doseId) {
   beep();
   navigator.vibrate?.([200, 100, 200, 100, 200]);
   const extra = m.instruccion === "con-comida" ? ", con comida" : m.instruccion === "ayunas" ? ", en ayunas" : "";
-  speak(`${shortName(p)}, es hora de tomar ${m.nombre}, ${m.dosis}${extra}.`);
+  const said = isCare()
+    ? `Aviso para ${shortName(p)}. Es hora de ${m.nombre}, ${m.dosis}${extra}.`
+    : `${shortName(p)}, es hora de tomar ${m.nombre}, ${m.dosis}${extra}.`;
+  speak(said);
 }
 function take(id) {
   const d = state.doses.find((x) => x.id === id);
@@ -519,7 +535,7 @@ function take(id) {
   ui.justId = id;
   logEvent(`Dosis confirmada · ${m ? m.nombre : "Medicamento"} ${d.hora}`);
   save();
-  flash("Dosis registrada");
+  flash(isCare() ? `Confirmada la toma de ${shortName(active())}` : "Listo. Quedó registrada tu toma");
 }
 function undo(id) {
   const d = state.doses.find((x) => x.id === id);
@@ -542,7 +558,9 @@ function simulateMiss() {
   const m = medById(d.medicamentoId);
   d.estado = "atrasada";
   d.alertaEnviada = true;
-  const msg = `${shortName(p)} no ha confirmado ${m.nombre} de las ${d.hora}. Se avisó a su cuidador ${p.cuidador}.`;
+  const msg = isCare()
+    ? `${shortName(p)} no ha confirmado ${m.nombre} de las ${d.hora}. La alerta te llega a ti, ${viewer().nombre}.`
+    : `No confirmaste ${m.nombre} de las ${d.hora}. Avisamos a tu cuidador ${p.cuidador}.`;
   state.alerts.unshift({ id: `a${Date.now()}`, perfilId: p.id, tomaId: d.id, tipo: "familiar", mensaje: msg, creadaEn: new Date().toISOString(), resuelta: false });
   logEvent(`Alerta a cuidador · ${m.nombre} ${d.hora}`);
   save();
@@ -665,11 +683,11 @@ function doseCard(d) {
   const food = instruccionTxt(m);
   const late = st === "atrasada";
   const done = st === "tomada";
-  let action = `<button type="button" class="btn-take" data-act="take" data-id="${esc(d.id)}">${ICON.check} Tomar</button>`;
+  let action = `<button type="button" class="btn-take" data-act="take" data-id="${esc(d.id)}">${ICON.check} ${isCare() ? "Confirmar" : "Ya la tomé"}</button>`;
   if (done) {
     action = `<div class="done-row"><span class="chip-ok">${ICON.check} Listo</span><button type="button" class="undo" data-act="undo" data-id="${esc(d.id)}" aria-label="Deshacer toma">${ICON.undo}</button></div>`;
   } else if (late) {
-    action = `<button type="button" class="btn-take" data-act="take" data-id="${esc(d.id)}">Tomar ahora</button>`;
+    action = `<button type="button" class="btn-take" data-act="take" data-id="${esc(d.id)}">${isCare() ? "Confirmar" : "Tomar ahora"}</button>`;
   }
   const p = state.profiles.find((x) => x.id === d.perfilId);
   return `<article class="dose ${done ? "done" : ""} ${late ? "late" : ""} ${ui.justId === d.id ? "pop" : ""}">
@@ -678,7 +696,7 @@ function doseCard(d) {
       <h3>${esc(m.nombre)}</h3>
       <p class="sub">${esc(m.dosis)} (1 ${esc(unit(m.formato))})</p>
       ${food ? `<p class="food">${ICON.food} ${esc(food)}</p>` : ""}
-      ${d.alertaEnviada ? `<p class="late-note">Alerta enviada a ${esc(p ? p.cuidador : "su cuidador")}</p>` : ""}
+      ${d.alertaEnviada ? `<p class="late-note">${isCare() ? `Aviso para ti, ${esc(viewer().nombre)}` : `Aviso enviado a ${esc(p ? p.cuidador : "tu cuidador")}`}</p>` : ""}
     </div>
     <div class="side">
       <span class="time ${late ? "bad" : ""}">${late ? `Atrasada · ${esc(d.hora)}` : esc(d.hora)}</span>
@@ -700,13 +718,41 @@ function screenHoy() {
     return `<h2 class="sec">${name}</h2>${items.map(doseCard).join("")}`;
   }).join("");
   return `<div class="pad">
-    <div class="sum"><span>${pend === 1 ? "1 toma pendiente" : `${pend} tomas pendientes`}</span><span class="quiet">${tomadas}/${list.length} tomadas</span></div>
+    <div class="sum"><span>${isCare() ? (pend === 1 ? `A ${esc(shortName(p))} le falta 1 toma` : `A ${esc(shortName(p))} le faltan ${pend} tomas`) : (pend === 1 ? "Te falta 1 toma" : `Te faltan ${pend} tomas`)}</span><span class="quiet">${tomadas}/${list.length}</span></div>
     ${next && nm ? `<section class="next ${late ? "late" : ""}">
       <div><p class="kicker">${late ? `ATRASADA · ${esc(next.hora)}` : `PRÓXIMA A LAS ${esc(next.hora)}`}</p><strong>${esc(nm.nombre)}</strong></div>
-      <button type="button" class="btn-alarm" data-act="alarm" data-id="${esc(next.id)}">${ICON.bell} Alarma</button>
+      <button type="button" class="btn-alarm" data-act="alarm" data-id="${esc(next.id)}">${ICON.bell} ${isCare() ? "Avisar" : "Alarma"}</button>
     </section>` : ""}
     ${groups || `<p class="empty">No hay tomas para hoy.</p>`}
     <p class="disclaimer">No reemplaza la indicación de un profesional de salud.</p>
+  </div>`;
+}
+function screenFamilia() {
+  const v = viewer();
+  const cards = state.profiles.map((p) => {
+    const list = dosesOf(p.id);
+    const pend = list.filter((d) => d.estado !== "tomada").length;
+    const late = list.filter((d) => viewEstado(d) === "atrasada").length;
+    const lows = lowMeds(p.id).length;
+    const bits = [
+      late ? `${late} atrasada${late === 1 ? "" : "s"}` : `${pend} pendiente${pend === 1 ? "" : "s"}`,
+      lows ? "stock bajo" : "",
+    ].filter(Boolean).join(" · ");
+    return `<button type="button" class="person ${p.id === state.activeProfileId ? "on" : ""}" data-act="pick-profile" data-id="${esc(p.id)}">
+      <span class="ava" style="background:${esc(p.color)}">${esc(initial(p.nombre))}</span>
+      <span class="grow">
+        <strong>${esc(p.nombre)}</strong>
+        <span class="tag">${esc(rolLabel(p))} · ${esc(p.edad)} años</span>
+        <small>${esc(bits)}${caresYou(p) ? "" : ` · ${esc(carePhrase(p))}`}</small>
+      </span>
+      <span class="go">Horario</span>
+    </button>`;
+  }).join("");
+  return `<div class="pad">
+    <p class="hello">Hola, ${esc(v.nombre)}. Estas personas toman medicamentos y tú recibes los avisos.</p>
+    ${cards}
+    <button type="button" class="dashed" data-act="open-profiles">${ICON.plus} Agregar paciente o familiar</button>
+    <button type="button" class="btn-outline" data-act="go-scan">${ICON.scan} Escanear una receta</button>
   </div>`;
 }
 function screenPastillero() {
@@ -740,7 +786,7 @@ function screenPastillero() {
   const first = lows[0];
   return `<div class="pad">
     <div class="head-row">
-      <div><h2>Pastillero de ${esc(shortName(p))}</h2><p class="sub">${rolLabel(p)} · ${meds.length} medicamento${meds.length === 1 ? "" : "s"}</p></div>
+      <div><h2>${isCare() ? `Pastillero de ${esc(shortName(p))}` : "Tu pastillero"}</h2><p class="sub">${isCare() ? `${esc(rolLabel(p))} · ` : ""}${meds.length} medicamento${meds.length === 1 ? "" : "s"}</p></div>
       <button type="button" class="btn-add" data-act="open-med">${ICON.plus} Agregar</button>
     </div>
     ${first ? `<div class="warn">
@@ -775,9 +821,9 @@ function screenScan() {
   }
   return `<div class="pad">
     <article class="scan-hero">
-      <h2>${ICON.scan} Escanear receta</h2>
-      <span class="tag">Para ${esc(shortName(p))} · ${esc(rolLabel(p))}</span>
-      <p class="sub">Apunta a una receta o caja impresa. El teléfono lee el texto y propone el medicamento. Tú confirmas antes de guardar.</p>
+      <h2>${ICON.scan} ${isCare() ? "Escanear receta" : "Tu receta"}</h2>
+      <span class="tag">${isCare() ? `Se guarda en ${esc(shortName(p))}` : "Se guarda en tu tratamiento"}</span>
+      <p class="sub">${isCare() ? `La receta queda en el horario de ${esc(shortName(p))}. Confírmala antes de guardar.` : "Apunta a una receta o caja impresa. El teléfono propone el medicamento y tú lo confirmas."}</p>
     </article>
     <div class="finder ${busy ? "scanning" : ""}">
       <video playsinline muted aria-label="Visor de la cámara"></video>
@@ -806,18 +852,32 @@ function screenInicio() {
     <h1 class="brand"><span class="medi">Medi</span><span class="alerta">Alerta</span></h1>
     <p class="slogan">MEDICAMENTOS · ALERTAS · CUIDADO</p>
     <p class="lead">Recordatorios claros de medicamentos, control de pastillero y acompañamiento familiar para adultos mayores.</p>
-    <p class="roles-note"><b>Cuidador:</b> quien usa la app y recibe las alertas.<br><b>Paciente o familiar:</b> la persona que toma los medicamentos.</p>
-    <button type="button" class="btn-primary" data-act="enter-demo"><span>Iniciar como Invitado / Modo Demo</span><small>Entras como cuidador: Demo Estudiante</small></button>
-    <button type="button" class="btn-outline" data-act="google">Iniciar sesión con Google</button>
+    <p class="roles-note"><b>Cuidador:</b> ve a toda la familia y recibe las alertas.<br><b>Paciente:</b> ve solo sus pastillas, en su propio teléfono.</p>
+    <button type="button" class="btn-primary" data-act="enter-care"><span>Entrar como cuidador</span><small>Demo Estudiante · Carlos, Carmen y Jorge</small></button>
+    <button type="button" class="btn-outline" data-act="enter-patient"><span>Entrar como paciente</span><small>Carlos · solo sus medicamentos</small></button>
     ${feats.map(([ico, title, text]) => `<article class="feat"><span class="feat-ico">${ico}</span><span><strong>${title}</strong><p>${text}</p></span></article>`).join("")}
   </div>
   <p class="disclaimer dock">No reemplaza la indicación de un profesional de salud.</p>`;
 }
 function menuHtml() {
   const v = viewer();
-  const items = state.profiles.map((p) => `<button type="button" class="menu-item ${p.id === state.activeProfileId ? "on" : ""}" data-act="pick-profile" data-id="${esc(p.id)}">
-    <span class="ava" style="background:${esc(p.color)}">${esc(initial(p.nombre))}</span>
-    <span><strong>${esc(p.nombre)}</strong><small>${esc(linea(p))}</small></span>
+  const p = active();
+  if (!isCare()) {
+    return `<div class="menu-back" data-act="close-menu"></div>
+    <div class="menu" role="menu">
+      <div class="session patient">
+        <span class="ava" style="background:${esc(p.color)}">${esc(initial(p.nombre))}</span>
+        <span><strong>${esc(p.nombre)}</strong><small>Paciente · ${esc(p.edad)} años</small><small>Tu cuidador: ${esc(p.cuidador)}</small></span>
+      </div>
+      <p class="kicker menu-k">Esta pantalla es solo tuya</p>
+      <button type="button" class="menu-link" data-act="enter-care">${ICON.users} Cambiar a la vista del cuidador</button>
+      <button type="button" class="menu-link" data-act="toggle-text">Tamaño de letra: ${state.largeText ? "Grande" : "Normal"}</button>
+      <button type="button" class="menu-link" data-act="logout">Salir</button>
+    </div>`;
+  }
+  const items = state.profiles.map((person) => `<button type="button" class="menu-item ${person.id === state.activeProfileId ? "on" : ""}" data-act="pick-profile" data-id="${esc(person.id)}">
+    <span class="ava" style="background:${esc(person.color)}">${esc(initial(person.nombre))}</span>
+    <span><strong>${esc(person.nombre)}</strong><small>${esc(linea(person))}</small></span>
   </button>`).join("");
   return `<div class="menu-back" data-act="close-menu"></div>
   <div class="menu" role="menu">
@@ -825,38 +885,48 @@ function menuHtml() {
       <span class="ava" style="background:#1F9D6B">${esc(initial(v.nombre))}</span>
       <span><strong>${esc(v.nombre)}</strong><small>Cuidador · ${esc(v.correo)}</small></span>
     </div>
-    <p class="kicker menu-k">Pacientes y familiares</p>
+    <p class="kicker menu-k">Personas a tu cuidado</p>
     ${items}
     <hr>
+    <button type="button" class="menu-link" data-act="enter-patient">${ICON.pill} Ver la pantalla de ${esc(shortName(titular()))}</button>
     <button type="button" class="menu-link" data-act="open-profiles">${ICON.plus} Agregar paciente o familiar…</button>
     <button type="button" class="menu-link" data-act="toggle-text">Tamaño de letra: ${state.largeText ? "Grande" : "Normal"}</button>
-    <button type="button" class="menu-link" data-act="logout">Cerrar sesión</button>
+    <button type="button" class="menu-link" data-act="logout">Salir</button>
   </div>`;
 }
 function chrome(route, body) {
   const p = active();
-  const v = viewer();
-  const titles = { hoy: "Horario de Hoy", pastillero: "Mi Pastillero", escanear: "Escanear Receta" };
+  const care = isCare();
+  const titles = care
+    ? { familia: "Tu familia", hoy: `Horario de ${shortName(p)}`, pastillero: "Pastillero", escanear: "Escanear" }
+    : { hoy: `Hola, ${shortName(p)}`, pastillero: "Tu pastillero", escanear: "Tu receta" };
   const low = lowMeds(p.id).length;
+  const tabs = care
+    ? `<a href="#/familia" class="${route === "familia" ? "on" : ""}"><span class="tic">${ICON.users}</span>Familia</a>
+       <a href="#/hoy" class="${route === "hoy" ? "on" : ""}"><span class="tic">${ICON.cal}</span>Hoy</a>
+       <a href="#/pastillero" class="${route === "pastillero" ? "on" : ""}" ${low ? `aria-label="Pastillero, ${low} alertas de stock"` : ""}><span class="tic">${ICON.pill}${low ? `<i class="badge">${low}</i>` : ""}</span>Stock</a>
+       <a href="#/escanear" class="${route === "escanear" ? "on" : ""}"><span class="tic">${ICON.scan}</span>Escanear</a>`
+    : `<a href="#/hoy" class="${route === "hoy" ? "on" : ""}"><span class="tic">${ICON.cal}</span>Hoy</a>
+       <a href="#/pastillero" class="${route === "pastillero" ? "on" : ""}" ${low ? `aria-label="Pastillero, ${low} alertas de stock"` : ""}><span class="tic">${ICON.pill}${low ? `<i class="badge">${low}</i>` : ""}</span>Pastillero</a>
+       <a href="#/escanear" class="${route === "escanear" ? "on" : ""}"><span class="tic">${ICON.scan}</span>Escanear</a>`;
   return `<header class="top">
-    <div class="top-title"><p class="date">${esc(fechaLarga())}</p><h1>${titles[route]}</h1></div>
+    <div class="top-title"><p class="date">${care ? "VISTA DEL CUIDADOR" : "VISTA DEL PACIENTE"}</p><h1>${titles[route] || "MediAlerta"}</h1></div>
     <div class="top-actions">
-      <button type="button" class="who" data-act="toggle-menu" aria-haspopup="menu" aria-expanded="${ui.menu}" aria-label="Cambiar paciente. Ahora ${esc(shortName(p))}, ${esc(rolLabel(p))}">
-        <span class="ava" style="background:${esc(p.color)}">${esc(initial(p.nombre))}</span>
-        <span class="who-txt"><span class="name">${esc(shortName(p))}</span><span class="role">${esc(rolLabel(p))}</span></span>${ICON.chev}
+      <button type="button" class="who" data-act="toggle-menu" aria-haspopup="menu" aria-expanded="${ui.menu}" aria-label="${care ? "Cambiar persona" : "Tu perfil"}">
+        <span class="ava" style="background:${esc(care ? "#1F9D6B" : p.color)}">${esc(initial(care ? viewer().nombre : p.nombre))}</span>
+        <span class="who-txt"><span class="name">${esc(care ? viewer().nombre.split(" ")[0] : shortName(p))}</span><span class="role">${care ? "Cuidador" : "Paciente"}</span></span>${ICON.chev}
       </button>
-      <button type="button" class="plus" data-act="open-med" aria-label="Agregar medicamento">${ICON.plus}</button>
+      ${care ? `<button type="button" class="plus" data-act="open-med" aria-label="Agregar medicamento">${ICON.plus}</button>` : ""}
     </div>
   </header>
-  <div class="rolebar">
-    <span><i class="pill-role care">Cuidador</i> ${esc(v.nombre)}</span>
-    <span><i class="pill-role">${esc(rolLabel(p))}</i> ${esc(shortName(p))}</span>
+  <div class="vista-switch" role="group" aria-label="Cambiar de vista">
+    <button type="button" data-act="enter-care" class="${care ? "on" : ""}">Cuidador</button>
+    <button type="button" data-act="enter-patient" class="${care ? "" : "on"}">Paciente</button>
   </div>
+  <p class="vista-note">${care ? `Supervisas a ${esc(shortName(p))}. Los avisos llegan a ${esc(viewer().nombre)}.` : `Esto es lo que ve ${esc(shortName(p))} en su teléfono. Su cuidador es ${esc(p.cuidador)}.`}</p>
   <div class="screen">${body}</div>
-  <nav class="tabs" aria-label="Secciones">
-    <a href="#/hoy" class="${route === "hoy" ? "on" : ""}"><span class="tic">${ICON.cal}</span>Hoy</a>
-    <a href="#/pastillero" class="${route === "pastillero" ? "on" : ""}" ${low ? `aria-label="Pastillero, ${low} alertas de stock"` : ""}><span class="tic">${ICON.pill}${low ? `<i class="badge">${low}</i>` : ""}</span>Pastillero</a>
-    <a href="#/escanear" class="${route === "escanear" ? "on" : ""}"><span class="tic">${ICON.scan}</span>Escanear</a>
+  <nav class="tabs ${care ? "tabs-4" : ""}" aria-label="Secciones">
+    ${tabs}
   </nav>
   ${ui.menu ? menuHtml() : ""}`;
 }
@@ -937,7 +1007,7 @@ function demoInner() {
     : `<li><span>Aún no hay eventos.</span></li>`;
   return `<div class="demo-card">
     <h2>Panel de demo · Solemne 2</h2>
-    <p class="flow">Cuidador: ${esc(viewer().nombre)} · ves a ${esc(shortName(active()))}</p>
+    <p class="flow">${isCare() ? `Vista del cuidador · ${esc(viewer().nombre)}` : `Vista del paciente · ${esc(shortName(active()))}`}</p>
     <button type="button" class="main" data-act="demo-alarm">Disparar recordatorio</button>
     <button type="button" data-act="demo-miss">Simular dosis no confirmada (+30 min)</button>
     <button type="button" data-act="demo-low">Forzar stock bajo</button>
@@ -955,22 +1025,26 @@ function alarmOverlay() {
   const food = instruccionTxt(m);
   return `<div class="alarm" role="dialog" aria-modal="true" aria-label="Recordatorio de medicamento">
     <div class="bell-wrap">${ICON.bell}</div>
-    <p>Medicamento de ${esc(shortName(p))} · ${esc(rolLabel(p))}</p>
+    <p>Medicamento de ${esc(shortName(p))}</p>
     <h2>${esc(m.nombre)}</h2>
     <p>${esc(m.dosis)} · 1 ${esc(unit(m.formato))}</p>
     ${food ? `<p>${esc(food)}</p>` : ""}
-    <button type="button" class="wide btn-light" data-act="alarm-take" data-id="${esc(d.id)}">${ICON.check} Ya lo tomé</button>
+    <button type="button" class="wide btn-light" data-act="alarm-take" data-id="${esc(d.id)}">${ICON.check} ${isCare() ? `${esc(shortName(p))} ya lo tomó` : "Ya lo tomé"}</button>
     <button type="button" class="wide btn-ghost" data-act="snooze">Posponer 10 min</button>
   </div>`;
 }
 function render() {
-  const route = currentRoute();
+  let route = currentRoute();
+  if (route === "familia" && !isCare()) {
+    history.replaceState(null, "", "#/hoy");
+    route = "hoy";
+  }
   const p = active();
-  const body = route === "hoy" ? screenHoy() : route === "pastillero" ? screenPastillero() : route === "escanear" ? screenScan() : "";
+  const body = route === "familia" ? screenFamilia() : route === "hoy" ? screenHoy() : route === "pastillero" ? screenPastillero() : route === "escanear" ? screenScan() : "";
   const app = route === "inicio" ? screenInicio() : chrome(route, body);
   const sheets = `${ui.sheet === "med" ? sheetMed() : ""}${ui.sheet === "profiles" ? sheetProfiles() : ""}${ui.sheet === "demo" ? `<div class="sheet-back" data-act="close-sheet"></div><section class="sheet demo-sheet" role="dialog" aria-label="Panel de demo"><div class="sheet-body">${demoInner()}</div></section>` : ""}`;
   document.getElementById("stage").innerHTML = `
-    <div class="device ${state.largeText ? "lg" : ""}" id="device">
+    <div class="device ${state.largeText ? "lg" : ""} ${route === "inicio" ? "" : (isCare() ? "vista-cuidador" : "vista-paciente")}" id="device">
       ${app}
       ${sheets}
       ${alarmOverlay()}
@@ -991,11 +1065,19 @@ document.addEventListener("click", (ev) => {
   const el = ev.target.closest("[data-act]");
   if (!el) return;
   const { act, id } = el.dataset;
-  if (act === "enter-demo") go("hoy");
-  else if (act === "google") { flash("Inicio con Google simulado en este prototipo"); setTimeout(() => go("hoy"), 600); }
+  if (act === "enter-care") enterAs("cuidador");
+  else if (act === "enter-patient") enterAs("paciente");
+  else if (act === "go-scan") go("escanear");
   else if (act === "toggle-menu") { ui.menu = !ui.menu; render(); }
   else if (act === "close-menu") { ui.menu = false; render(); }
-  else if (act === "pick-profile") { state.activeProfileId = id; ui.menu = false; ui.sheet = null; save(); render(); }
+  else if (act === "pick-profile") {
+    state.activeProfileId = id;
+    ui.menu = false;
+    ui.sheet = null;
+    save();
+    if (currentRoute() === "familia") go("hoy");
+    else render();
+  }
   else if (act === "logout") { ui.menu = false; go("inicio"); }
   else if (act === "toggle-text") { state.largeText = !state.largeText; save(); render(); }
   else if (act === "open-med") openMed(null);
